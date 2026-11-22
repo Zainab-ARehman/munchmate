@@ -1,0 +1,129 @@
+name: MunchMate CI/CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: munchmate-deploy
+  cancel-in-progress: false
+
+jobs:
+  # 1. Unit tests: the pipeline stops here if any test fails
+  test:
+    name: 1. Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
+
+  # 2. DevSecOps: dependency scan + secret scan
+  security:
+    name: 2a. Dependency and secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Dependency vulnerability scan (npm audit)
+        run: npm audit --audit-level=high
+      - name: Secret scan (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 2b. DevSecOps: static code analysis (SAST). Free on public repositories.
+  codeql:
+    name: 2b. CodeQL static analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+      - uses: github/codeql-action/analyze@v3
+
+  # 3. Build the package and store it in S3
+  build:
+    name: 3. Build and upload to S3
+    needs: [test, security, codeql]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Package the application
+        run: |
+          NAME="build-v${{ steps.v.outputs.version }}-${{ github.run_number }}.zip"
+          zip -r "$NAME" server.js package.json public
+          echo "BUILD_NAME=$NAME" >> "$GITHUB_ENV"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Upload build to S3 and mark it as latest
+        run: |
+          aws s3 cp "$BUILD_NAME" "s3://${{ secrets.S3_BUCKET }}/builds/$BUILD_NAME"
+          echo "builds/$BUILD_NAME" > latest.txt
+          aws s3 cp latest.txt "s3://${{ secrets.S3_BUCKET }}/builds/latest.txt"
+          echo "Uploaded $BUILD_NAME to S3"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BUILD_NAME }}
+          path: ${{ env.BUILD_NAME }}
+
+  # 4. Deploy the latest build from S3 to the EC2 server, then verify production
+  deploy:
+    name: 4. Deploy latest build to EC2
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Tell EC2 to pull the latest build from S3 and restart
+        env:
+          INSTANCE: ${{ secrets.EC2_INSTANCE_ID }}
+          BUCKET: ${{ secrets.S3_BUCKET }}
+        run: |
+          CMD_ID=$(aws ssm send-command --instance-ids "$INSTANCE" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[\"sudo /opt/munchmate/deploy.sh $BUCKET\"]" \
+            --query "Command.CommandId" --output text)
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$INSTANCE" || true
+          STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" --query Status --output text)
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" --query StandardOutputContent --output text
+          [ "$STATUS" = "Success" ] || { echo "Deployment failed ($STATUS)"; exit 1; }
+      - name: Verify production
+        env:
+          PROD_URL: ${{ secrets.PROD_URL }}
+          EXPECTED: ${{ needs.build.outputs.version }}
+        run: |
+          [ -n "$PROD_URL" ] || { echo "PROD_URL secret not set, skipping"; exit 0; }
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            LIVE=$(curl -fsS "$PROD_URL/api/version" || true); echo "Live response: $LIVE"
+            echo "$LIVE" | grep -q "\"version\":\"$EXPECTED\"" && { echo "Production is running v$EXPECTED"; exit 0; }
+            sleep 5
+          done
+          echo "Production did not report v$EXPECTED"; exit 1
