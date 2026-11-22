@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MunchMate</title>
+<style>
+:root{--br:#4E342E;--ac:#E07B39;--bg:#FFF8F1;--card:#fff;--line:#eadfd3;--mut:#7a665e}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:#2b1d19}
+header{background:var(--br);color:#fff;padding:14px 24px;display:flex;align-items:center;gap:20px;position:sticky;top:0;z-index:5}
+header b{font-size:22px}header a{color:#f3e3d6;text-decoration:none;cursor:pointer}
+.wrap{display:grid;grid-template-columns:1fr 360px;gap:20px;padding:20px;max-width:1400px;margin:auto}
+@media(max-width:1000px){.wrap{grid-template-columns:1fr}}
+.hero{background:linear-gradient(120deg,#4E342E,#8a5a44);color:#fff;border-radius:18px;padding:40px;margin-bottom:20px}
+.hero h1{font-size:44px;margin:0 0 8px}.hero p{font-size:18px;opacity:.9;margin:0 0 18px}
+.hero input{padding:12px;border-radius:10px;border:0;font-size:16px;margin-right:8px}
+button{background:var(--ac);color:#fff;border:0;padding:12px 20px;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}button.ghost{background:#efe3d8;color:var(--br)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center}
+.item .e{font-size:44px}.item h3{margin:6px 0 2px;font-size:16px}.item .p{color:var(--mut);margin-bottom:10px}
+.qty{display:flex;justify-content:center;align-items:center;gap:12px}.qty button{padding:4px 12px;font-size:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+h2{color:var(--br);margin:0 0 12px}
+.steps{display:flex;gap:6px;margin:16px 0}.step{flex:1;text-align:center;font-size:12px;color:var(--mut)}
+.step i{display:block;height:8px;border-radius:4px;background:var(--line);margin-bottom:6px}.step.on i{background:var(--ac)}.step.on{color:var(--br);font-weight:700}
+.badge{display:inline-block;background:var(--ac);color:#fff;border-radius:20px;padding:4px 14px;font-weight:700}
+.err{background:#fde2df;color:#8a2a20;padding:10px 14px;border-radius:10px;margin:10px 0}
+ul.t{list-style:none;padding:0;margin:0}ul.t li{padding:6px 0;border-bottom:1px solid var(--line);font-size:14px}
+.side .log{height:300px;overflow:auto;background:#1f1512;color:#e9ddd3;border-radius:10px;padding:10px;font:12px/1.5 Consolas,monospace}
+.log .warn{color:#f2c46d}.log .error{color:#ff8a80}.log .event{color:#b9a3ff}.log .cache{color:#7fd6c2}
+.tg{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.tg button{padding:6px 10px;font-size:12px}.tg button.off{background:#c0392b}
+.stats{font-size:13px;color:var(--mut)}
+</style></head><body>
+<header><b>🍽️ MunchMate</b><span id="ver" style="opacity:.7;font-size:13px"></span><a onclick="location.hash=''">Home</a><a onclick="location.hash='#menu'">Menu</a><a id="myorder" onclick="goOrder()">My order</a></header>
+<div class="wrap"><main id="main"></main>
+<aside class="side"><div class="card"><h2>Behind the scenes</h2>
+<div class="stats" id="stats"></div><div class="tg" id="tg"></div><div class="log" id="log"></div>
+<p class="stats">Live log of the gateway, services, SNS/SQS queues, Redis cache and Lambdas. Break a component and place an order to see how the system copes.</p></div></aside></div>
+<script>
+const $=s=>document.querySelector(s);let token=localStorage.mm_token,name=localStorage.mm_name||'',cart={},menu=[],es=null;
+const rs=n=>'Rs '+n;
+async function api(p,o={}){const r=await fetch('/api'+p,{...o,headers:{'content-type':'application/json','x-token':token||''},body:o.body&&JSON.stringify(o.body)});const j=await r.json();if(!r.ok)throw j;return j}
+async function login(n){name=n||name||'Guest';localStorage.mm_name=name;token=(await(await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name})})).json()).token;localStorage.mm_token=token}
+async function route(){const h=location.hash;if(es){es.close();es=null}
+ if(!token)await login();
+ if(h.startsWith('#order/'))return orderView(h.slice(7));
+ try{menu=await api('/menu')}catch{await login();menu=await api('/menu')}
+ homeView(h==='#menu')}
+function homeView(scroll){$('#main').innerHTML=`<div class="hero"><h1>Hungry? Just munch it.</h1><p>Order from your favourite restaurants and track your food live.</p>
+<input id="nm" placeholder="Your name" value="${name}"><button onclick="start()">Order now</button></div>
+<div id="menu"><h2>Menu</h2><div class="grid">${menu.map(m=>`<div class="item"><div class="e">${m.emoji}</div><h3>${m.name}</h3><div class="p">${rs(m.price)}</div>
+<div class="qty"><button class="ghost" onclick="chg(${m.id},-1)">-</button><b id="q${m.id}">${cart[m.id]||0}</b><button onclick="chg(${m.id},1)">+</button></div></div>`).join('')}</div></div>
+<div class="card" style="margin-top:20px"><h2>Your cart</h2><div id="cart"></div><div id="err"></div><button id="place" onclick="place()">Place order</button></div>`;
+ drawCart();if(scroll)$('#menu').scrollIntoView()}
+async function start(){const n=$('#nm').value.trim();if(n&&n!==name)await login(n);$('#menu').scrollIntoView({behavior:'smooth'})}
+function chg(id,d){cart[id]=Math.max(0,(cart[id]||0)+d);$('#q'+id).textContent=cart[id];drawCart()}
+function drawCart(){const l=menu.filter(m=>cart[m.id]);const t=l.reduce((s,m)=>s+m.price*cart[m.id],0);
+ $('#cart').innerHTML=l.length?l.map(m=>`<div>${cart[m.id]} x ${m.name} <span style="float:right">${rs(m.price*cart[m.id])}</span></div>`).join('')+`<hr><b>Total <span style="float:right">${rs(t)}</span></b>`:'<span class="stats">Add something tasty from the menu.</span>';
+ $('#place').disabled=!l.length}
+async function place(){const b=$('#place');b.disabled=true;b.textContent='Placing order...';$('#err').innerHTML='';
+ try{const o=await api('/orders',{method:'POST',body:{items:Object.entries(cart).map(([id,qty])=>({id:+id,qty}))}});cart={};localStorage.mm_order=o.id;location.hash='#order/'+o.id}
+ catch(e){$('#err').innerHTML=`<div class="err">${e.msg||'Something went wrong'}</div>`;b.disabled=false;b.textContent='Place order'}}
+function goOrder(){const id=localStorage.mm_order;location.hash=id?'#order/'+id:'#menu'}
+const STEPS=[['PLACED','Placed'],['ACCEPTED','Accepted'],['PREPARING','Preparing'],['RIDER_ASSIGNED','Rider assigned'],['PICKED_UP','On the way'],['DELIVERED','Delivered']];
+function orderView(id){$('#main').innerHTML='<div class="card">Loading your order...</div>';
+ es=new EventSource(`/api/orders/${id}/stream?token=${token}`);es.onmessage=e=>drawOrder(JSON.parse(e.data));es.onerror=()=>{}}
+function drawOrder(o){const idx=STEPS.findIndex(s=>s[0]===o.status);
+ $('#main').innerHTML=`<div class="card"><h2>My order ${o.id}</h2><span class="badge">${o.status.replace('_',' ')}</span>
+<div class="steps">${STEPS.map((s,i)=>`<div class="step ${i<=idx?'on':''}"><i></i>${s[1]}</div>`).join('')}</div>
+${o.rider?`<p>🛵 Your rider: <b>${o.rider}</b></p>`:''}
+<h3>Items</h3>${o.lines.map(l=>`<div>${l.qty} x ${l.name} <span style="float:right">${rs(l.qty*l.price)}</span></div>`).join('')}<hr><b>Total <span style="float:right">${rs(o.total)}</span></b></div>
+<div class="card"><h2>Notifications</h2><ul class="t">${o.notifications.slice().reverse().map(n=>`<li>🔔 ${n.msg}</li>`).join('')||'<li class="stats">None yet</li>'}</ul></div>
+<div class="card"><h2>Status timeline</h2><ul class="t">${o.history.slice().reverse().map(h=>`<li><b>${h.status.replace('_',' ')}</b> - ${h.note} <span class="stats">${new Date(h.t).toTimeString().slice(0,8)}</span></li>`).join('')}</ul></div>
+${o.receipt?`<div class="card"><h2>Receipt</h2><pre>${o.receipt}</pre></div>`:''}
+<button class="ghost" onclick="location.hash='#menu'">Order something else</button>`}
+// Behind the scenes panel
+const SW=[['payments','Payments'],['delivery','Delivery'],['notify','Notifications'],['jobs','Receipts'],['cache','Redis cache']];
+async function toggle(s){const st=await(await fetch('/api/system')).json();await fetch('/api/admin/fail',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({service:s,down:!st.down[s]})});stats()}
+async function stats(){const s=await(await fetch('/api/system')).json();
+ $('#stats').innerHTML='Queues waiting: '+s.queues.map(q=>`${q.name} ${q.waiting}${q.dlq?` (DLQ ${q.dlq})`:''}`).join(' | ')+`<br>Cache hits: ${s.cache.hits}, misses: ${s.cache.misses}`;
+ $('#tg').innerHTML=SW.map(([k,l])=>`<button class="${s.down[k]?'off':'ghost'}" onclick="toggle('${k}')">${s.down[k]?'Restore':'Break'} ${l}</button>`).join('')}
+const lg=$('#log'),ev=new EventSource('/api/events');ev.onmessage=e=>{const x=JSON.parse(e.data),d=document.createElement('div');d.className=x.kind;d.textContent=`${x.t} [${x.svc}] ${x.msg}`;lg.appendChild(d);lg.scrollTop=lg.scrollHeight};
+fetch('/api/version').then(r=>r.json()).then(v=>$('#ver').textContent='v'+v.version);setInterval(stats,2000);stats();window.onhashchange=route;route();
+</script></body></html>

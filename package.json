@@ -1,0 +1,7 @@
+{
+  "name": "munchmate",
+  "version": "1.0.0",
+  "description": "MunchMate food delivery: local microservices + event-driven demo",
+  "scripts": { "start": "node server.js", "test": "node --test" },
+  "engines": { "node": ">=18" }
+}
