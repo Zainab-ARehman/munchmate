@@ -44,7 +44,7 @@ async function route(){const h=location.hash;if(es){es.close();es=null}
  if(h.startsWith('#order/'))return orderView(h.slice(7));
  try{menu=await api('/menu')}catch{await login();menu=await api('/menu')}
  homeView(h==='#menu')}
-function homeView(scroll){$('#main').innerHTML=`<div class="hero"><h1>Hungry? Munch it now.</h1><p>Order from your favourite restaurants and track your food live.</p>
+function homeView(scroll){$('#main').innerHTML=`<div class="hero"><h1>Hungry? just munch it.</h1><p>Order from your favourite restaurants and track your food live.</p>
 <input id="nm" placeholder="Your name" value="${name}"><button onclick="start()">Order now</button></div>
 <div id="menu"><h2>Menu</h2><div class="grid">${menu.map(m=>`<div class="item"><div class="e">${m.emoji}</div><h3>${m.name}</h3><div class="p">${rs(m.price)}</div>
 <div class="qty"><button class="ghost" onclick="chg(${m.id},-1)">-</button><b id="q${m.id}">${cart[m.id]||0}</b><button onclick="chg(${m.id},1)">+</button></div></div>`).join('')}</div></div>
